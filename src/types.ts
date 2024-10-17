@@ -37,3 +37,9 @@ export interface AnovaData {
   fValue: number;
   files: string[] | null;
 }
+
+export interface TranscriptLine {
+  type: string;
+  words: string;
+  caption_ms: number;
+}

@@ -1,8 +1,22 @@
-import React, { useState, ReactElement } from "react";
+import React, { useState, ReactElement, useRef, useEffect } from "react";
 import "./App.css";
 import Plot from "react-plotly.js";
-import { jStat } from "jstat";
-import { ResultObj, ResultObjOptions, AnovaData } from "./types";
+import {
+  anovaF,
+  sortObjectByKeys,
+  readFiles,
+  convertToMp4,
+} from "./utils/utils";
+import {
+  ResultObj,
+  ResultObjOptions,
+  AnovaData,
+  TranscriptLine,
+} from "./types";
+import { Data } from "plotly.js";
+import ComparePage from "./pages/ComparePage";
+import html2canvas from "html2canvas";
+import RecordRTC, { invokeSaveAsDialog } from "recordrtc";
 
 declare module "react" {
   interface InputHTMLAttributes<T> extends HTMLAttributes<T> {
@@ -10,50 +24,6 @@ declare module "react" {
     directory?: string;
     webkitdirectory?: string;
   }
-}
-
-function anovaF(groups: number[][]): number {
-  // Calculate the total number of observations
-  let totalN = 0;
-  for (let group of groups) {
-    totalN += group.length;
-  }
-
-  // Calculate the overall mean
-  let overallSum = 0;
-  for (let group of groups) {
-    for (let value of group) {
-      overallSum += value;
-    }
-  }
-  let overallMean = overallSum / totalN;
-
-  // Calculate the between-group sum of squares (SSB)
-  let SSB = 0;
-  for (let group of groups) {
-    let groupMean = jStat.mean(group);
-    SSB += group.length * Math.pow(groupMean - overallMean, 2);
-  }
-
-  // Calculate the within-group sum of squares (SSW)
-  let SSW = 0;
-  for (let group of groups) {
-    for (let value of group) {
-      SSW += Math.pow(value - jStat.mean(group), 2);
-    }
-  }
-
-  // Calculate the degrees of freedom
-  let dfBetween = groups.length - 1;
-  let dfWithin = totalN - groups.length;
-
-  // Calculate the mean squares
-  let MSB = SSB / dfBetween;
-  let MSW = SSW / dfWithin;
-
-  // Calculate the F-statistic
-  let F = MSB / MSW;
-  return F;
 }
 
 const colors: string[] = [
@@ -69,60 +39,11 @@ const colors: string[] = [
   "#17becf", // blue-teal
 ];
 
-function alphanumSort(a: string, b: string): number {
-  // Split strings into parts of digits and non-digits
-  const re = /(\d+|\D+)/g;
-  const aParts = a.match(re);
-  const bParts = b.match(re);
-
-  if (!aParts || !bParts) return -1;
-
-  for (let i = 0; i < Math.min(aParts.length, bParts.length); i++) {
-    const aPart = aParts[i];
-    const bPart = bParts[i];
-
-    // Compare numeric parts as numbers
-    if (!isNaN(parseFloat(aPart)) && !isNaN(parseFloat(bPart))) {
-      const diff = Number(aPart) - Number(bPart);
-      if (diff !== 0) return diff;
-    }
-    // Compare non-numeric parts as strings (case-insensitive)
-    else {
-      const diff = aPart.localeCompare(bPart, undefined, {
-        sensitivity: "base",
-      });
-      if (diff !== 0) return diff;
-    }
-  }
-
-  // If all parts are equal, the shorter string comes first
-  return aParts.length - bParts.length;
-}
-
-function sortObjectByKeys(obj: ResultObjOptions): ResultObjOptions {
-  // Get the object keys and sort them alphanumerically.
-  const sortedKeys = Object.keys(obj).sort(alphanumSort);
-
-  // Create a new sorted object.
-  const sortedObj: ResultObjOptions = {};
-  sortedKeys.forEach((key) => {
-    sortedObj[key] = obj[key];
-  });
-
-  return sortedObj;
-}
-
-const readFiles = async (folder: string) => {
-  const response = await fetch("http://localhost:4000/inputs/" + folder);
-  const data = await response.json();
-  return data;
-};
-
 function App() {
-  const [werPlotData, setWerPlotData] = useState<any[] | null>(null);
-  const [delayPlotData, setDelayPlotData] = useState<any[] | null>(null);
-  const [corrRatePlotData, setCorrRatePlotData] = useState<any[] | null>(null);
-  const [diffPlotData, setDiffPlotData] = useState<any[] | null>(null);
+  const [werPlotData, setWerPlotData] = useState<Data[] | null>(null);
+  const [delayPlotData, setDelayPlotData] = useState<Data[] | null>(null);
+  const [corrRatePlotData, setCorrRatePlotData] = useState<Data[] | null>(null);
+  const [diffPlotData, setDiffPlotData] = useState<Data[] | null>(null);
   const [diffPlotLayout, setdiffPlotLayout] = useState<object | null>(null);
   const [plotMode, setPlotMode] = useState<string>("wer");
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +53,211 @@ function App() {
   const [fileOptions, setFileOptions] = useState<ResultObjOptions | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[] | null>(null);
   const [anovaData, setAnovaData] = useState<AnovaData | null>(null);
+
+  ////////////// FOR AUDIO ///////////////
+  const [audioSrc, setAudioSrc] = useState<string | null>(null); // To store the audio source.
+  const [transcriptSrc, setTranscriptSrc] = useState<TranscriptLine[] | null>(
+    null
+  );
+  const [prelimDisplay, setPrelimDisplay] = useState<string | null>(null);
+  const [finalDisplay, setFinalDisplay] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null); // Reference to the audio element.
+
+  // Function to handle file selection.
+  const handleAudioChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!event.target.files) return;
+    const file = event.target.files[0]; // Get the selected file.
+    if (file) {
+      const fileUrl = URL.createObjectURL(file); // Create a URL for the file.
+      setAudioSrc(fileUrl); // Set the file URL as the source for the audio player.
+    }
+  };
+
+  const handleTranscriptChange = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    if (!event.target.files) return;
+    const file = event.target.files[0]; // Get the selected file.
+    const data = await readFiles(file.name);
+    if (data) {
+      setTranscriptSrc(data); // Set complete transcript to transcriptSrc.
+    }
+  };
+
+  const onPlaying = () => {
+    // Get time in ms.
+    if (!audioRef.current || !transcriptSrc) return;
+    const ct = audioRef.current.currentTime * 1000.0;
+
+    // Format new transcript display.
+    let finalResult = "";
+    let prelimResult = "";
+    let idx = 0;
+    while (idx < transcriptSrc.length) {
+      if (ct < transcriptSrc[idx]["caption_ms"]) {
+        break;
+      }
+      if (transcriptSrc[idx]["type"] === "final") {
+        finalResult += transcriptSrc[idx]["words"] + " ";
+        prelimResult = "";
+      } else {
+        prelimResult = transcriptSrc[idx]["words"];
+      }
+      idx++;
+    }
+
+    setFinalDisplay(finalResult);
+    setPrelimDisplay(prelimResult);
+  };
+
+  const AudioPlayer = () => {
+    return (
+      <div>
+        <h2>Select an Audio File</h2>
+        <input type="file" accept="audio/*" onChange={handleAudioChange} />
+        {audioSrc && (
+          <audio ref={audioRef} controls onTimeUpdate={onPlaying}>
+            <source src={audioSrc} type="audio/mpeg" />
+            Your browser does not support the audio element.
+          </audio>
+        )}
+
+        <h2>Select an Transcript File</h2>
+        <input type="file" accept=".json" onChange={handleTranscriptChange} />
+        {transcriptSrc && (
+          <div>
+            <p>
+              Display: <strong>{finalDisplay}</strong>
+              {prelimDisplay}
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const recorderRef = useRef<RecordRTC | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const divRef = useRef<HTMLDivElement | null>(null);
+  const messageRef = useRef<HTMLParagraphElement | null>(null);
+
+  const mirrorDivToCanvas = () => {
+    const div = divRef.current;
+    const canvas = canvasRef.current;
+
+    if (div && canvas) {
+      // Use html2canvas to capture the div and draw onto the canvas.
+      html2canvas(div).then((canvasDiv) => {
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        // Resize the canvas to match the div's dimensions.
+        canvas.width = canvasDiv.width;
+        canvas.height = canvasDiv.height;
+        // Draw the captured div onto the canvas.
+        ctx.drawImage(canvasDiv, 0, 0);
+      });
+    } else {
+      console.log("no context or div");
+    }
+  };
+
+  // Update canvas every time display is updated.
+  useEffect(() => {
+    mirrorDivToCanvas();
+  }, [prelimDisplay, finalDisplay]);
+
+  const Recorder = () => {
+    const handleRecording = async () => {
+      const canvas = canvasRef.current;
+
+      if (!canvas) return;
+
+      // Capture stream from the canvas
+      const canvasStream = canvas.captureStream();
+
+      // Capture system audio (display media) with audio options
+      const options = {
+        audio: true,
+        selfBrowserSurface: "include",
+        preferCurrentTab: true,
+      };
+      const audioStream = await navigator.mediaDevices.getDisplayMedia(options);
+
+      // Combine canvas stream (video) and system audio.
+      const combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...audioStream.getAudioTracks(),
+      ]);
+
+      // Initialize RecordRTC with the stream.
+      recorderRef.current = new RecordRTC(combinedStream, {
+        // mimeType: "video/webm;codecs=h264",
+      });
+      recorderRef.current.startRecording();
+    };
+
+    const handleStopAndSave = async () => {
+      if (!recorderRef.current) return;
+
+      recorderRef.current.stopRecording(async () => {
+        if (!recorderRef.current || !messageRef.current) return;
+        var blob = recorderRef.current.getBlob();
+
+        var webmFile: File = new File([blob], "file-name.webm", {
+          type: "video/webm",
+        });
+        const mp4Blob = await convertToMp4(webmFile, messageRef.current);
+        const mp4File: File = new File([mp4Blob], "recording.mp4", {
+          type: "video/mp4",
+        });
+        var url = URL.createObjectURL(mp4File);
+
+        setVideoUrl(url);
+        invokeSaveAsDialog(mp4File);
+      });
+    };
+
+    return (
+      <div>
+        <header>
+          <button onClick={handleRecording}>start</button>
+          <button onClick={handleStopAndSave}>stop</button>
+
+          <div
+            ref={divRef}
+            style={{
+              border: "2px solid black",
+              backgroundColor: "blue",
+              marginBottom: "20px",
+              height: "480px",
+              width: "600px",
+            }}
+          >
+            <p>
+              Display: <strong>{finalDisplay}</strong>
+              {prelimDisplay}
+            </p>
+          </div>
+
+          <p ref={messageRef}></p>
+
+          <canvas ref={canvasRef} style={{ display: "none" }}></canvas>
+
+          {videoUrl && (
+            <video
+              src={videoUrl}
+              controls
+              autoPlay
+              style={{ width: "700px", margin: "1em" }}
+            />
+          )}
+        </header>
+      </div>
+    );
+  };
+
+  ////////////////////////
 
   const handleColorChange = (idx: number, color: string) => {
     const currColors = [...tempPlotColors];
@@ -257,7 +383,7 @@ function App() {
 
       for (let key in sortedCorrRateData) {
         const yData = Object.values(
-          sortedCorrRateData[key]["results"]["char_correction_pct"]
+          sortedCorrRateData[key]["results"]["word_correction_pct"]
         );
 
         corrRatePlotData.push({
@@ -312,8 +438,8 @@ function App() {
     const file1 = fileOptions[selectedFiles[1]];
     let title = "";
     let yLabel = "";
-    const yData = [];
-    const plotData = [];
+    const yData: number[] = [];
+    const plotData: Data[] = [];
     let layout = {};
 
     if (file0["job_type"] !== file1["job_type"]) {
@@ -321,7 +447,9 @@ function App() {
     }
 
     if (file0["job_type"] === "wer") {
-      title = `${selectedFiles[0]} vs ${selectedFiles[1]} WER Differential`;
+      const fileName0 = selectedFiles[0].slice(0, selectedFiles[0].length - 10);
+      const fileName1 = selectedFiles[1].slice(0, selectedFiles[1].length - 10);
+      title = `${fileName0} vs ${fileName1} WER Differential`;
       yLabel = "Percentage Differential (%)";
       const results0 = file0["results"]["wer"];
       const results1 = file1["results"]["wer"];
@@ -345,7 +473,9 @@ function App() {
     }
 
     if (file0["job_type"] === "delay") {
-      title = `${selectedFiles[0]} vs ${selectedFiles[1]} DELAY Differential`;
+      const fileName0 = selectedFiles[0].slice(0, selectedFiles[0].length - 12);
+      const fileName1 = selectedFiles[1].slice(0, selectedFiles[1].length - 12);
+      title = `${fileName0} vs ${fileName1} DELAY Differential`;
       yLabel = "Time Differential (s)";
       const results0 = file0["results"]["delays"];
       const results1 = file1["results"]["delays"];
@@ -381,10 +511,12 @@ function App() {
     }
 
     if (file0["job_type"] === "corr_rate") {
-      title = `${selectedFiles[0]} vs ${selectedFiles[1]} CHAR CORRECTION RATE Differential`;
+      const fileName0 = selectedFiles[0].slice(0, selectedFiles[0].length - 16);
+      const fileName1 = selectedFiles[1].slice(0, selectedFiles[1].length - 16);
+      title = `${fileName0} vs ${fileName1} WORD CORR RATE Differential`;
       yLabel = "Percentage Differential (%)";
-      const results0 = file0["results"]["char_correction_pct"];
-      const results1 = file1["results"]["char_correction_pct"];
+      const results0 = file0["results"]["word_correction_pct"];
+      const results1 = file1["results"]["word_correction_pct"];
 
       for (let key in results0) {
         if (results1.hasOwnProperty(key)) {
@@ -437,7 +569,6 @@ function App() {
   };
 
   const handleAnovaCompare = () => {
-    console.log("ANOVA COMPARE");
     if (!selectedFiles || !fileOptions) return;
     if (selectedFiles.length < 2) {
       return alert("ANOVA test requires at least 2 files");
@@ -492,18 +623,17 @@ function App() {
       }
     }
 
-    const pVal = jStat.anovaftest(...dataPoints);
-    const fVal = anovaF(dataPoints);
+    const stats = anovaF(dataPoints);
     const anovaResults: AnovaData = {
-      pValue: pVal,
-      fValue: fVal,
+      pValue: stats.pVal,
+      fValue: stats.fVal,
       files: selectedFiles,
     };
 
     setAnovaData(anovaResults);
 
-    console.log("ANOVA F-test p-value:", pVal);
-    console.log("ANOVA F-Test f-value", fVal);
+    console.log("ANOVA F-test p-value:", stats.pVal);
+    console.log("ANOVA F-Test f-value", stats.fVal);
   };
 
   const ColorSettings = (): ReactElement => {
@@ -529,13 +659,13 @@ function App() {
   };
 
   const displayPlot = (
-    yData: any[],
+    data: Data[],
     title: string,
     yLabel: string
   ): ReactElement => {
     return (
       <Plot
-        data={yData}
+        data={data}
         layout={{
           title: {
             text: title,
@@ -595,10 +725,12 @@ function App() {
             CORRECTION RATE
           </button>
           <button onClick={() => setPlotMode("compare")}>COMPARE</button>
+          <button onClick={() => setPlotMode("audio")}>AUDIO</button>
           <button onClick={() => setPlotMode("settings")}>SETTINGS</button>
         </div>
       </header>
 
+      {/* Pages below header. */}
       <div
         style={{
           display: "flex",
@@ -618,7 +750,7 @@ function App() {
           plotMode === "corr_rate" &&
           displayPlot(
             corrRatePlotData,
-            "CHARACTER CORRECTION RATE",
+            "WORD CORRECTION RATE",
             "Percentage (%)"
           )}
 
@@ -637,69 +769,23 @@ function App() {
           </div>
         )}
 
-        {plotMode === "compare" && fileOptions && (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              width: "80vw",
-              alignItems: "center",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-              }}
-            >
-              <select
-                multiple={true}
-                onChange={handleSelectChange}
-                style={{
-                  height: "60vh",
-                  width: "25vw",
-                  marginTop: "8px",
-                }}
-              >
-                {Object.keys(fileOptions).map((option, index) => (
-                  <option key={index} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-              {anovaData && anovaData["files"] && (
-                <div
-                  style={{
-                    border: "3px solid black",
-                    marginLeft: "8px",
-                    marginTop: "4px",
-                    padding: "8px",
-                  }}
-                >
-                  <h3>ANOVA Analysis</h3>
-                  <p>F-Value: {anovaData["fValue"]}</p>
-                  <p>P-Value: {anovaData["pValue"]}</p>
-                  <p>
-                    <strong>Files: </strong>
-                    {anovaData["files"].map((file) => {
-                      return <p>{file}</p>;
-                    })}
-                  </p>
-                </div>
-              )}
-            </div>
-            <div>
-              <button onClick={handleTTestCompare}>T-Test Compare</button>
-              <button onClick={handleAnovaCompare}>ANOVA Compare</button>
-            </div>
+        {plotMode === "compare" &&
+          fileOptions &&
+          ComparePage(
+            fileOptions,
+            anovaData,
+            diffPlotData,
+            diffPlotLayout,
+            handleSelectChange,
+            handleTTestCompare,
+            handleAnovaCompare
+          )}
 
-            {diffPlotData && diffPlotLayout && (
-              <Plot
-                data={diffPlotData}
-                layout={diffPlotLayout}
-                style={{ width: "80%", height: "85vh" }}
-              />
-            )}
-          </div>
+        {plotMode === "audio" && (
+          <>
+            {AudioPlayer()}
+            {Recorder()}
+          </>
         )}
       </div>
     </div>

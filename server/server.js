@@ -15,10 +15,20 @@ app.use(function (req, res, next) {
   next();
 });
 
-app.get("/inputs/:folder", function (req, res, next) {
-  const folder = req.params.folder;
-  const inputPath = path.join("../public/inputs/", folder);
-  const result = {};
+app.get("/inputs/:directory", function (req, res, next) {
+  const directory = req.params.directory;
+  const inputPath = path.join("../public/inputs/", directory);
+
+  // If input path was a file, then return file content.
+  if (fs.lstatSync(inputPath).isFile()) {
+    const data = require(inputPath);
+    return res.send(data);
+  }
+
+  // result that holds all the files in directory, initiate a base folder to store files in the root.
+  const result = {
+    base: {},
+  };
 
   try {
     const dirs = fs.readdirSync(inputPath);
@@ -27,16 +37,15 @@ app.get("/inputs/:folder", function (req, res, next) {
     for (let i = 0; i < dirs.length; i++) {
       const dir = dirs[i];
       const dirPath = path.join(inputPath, dir);
-      if (dir === "total.json") continue;
 
-      // Make sure only directories exist here.
-      if (!fs.lstatSync(dirPath).isDirectory()) {
-        res.status(500).json({
-          error: "File found in directories. Check results folder.",
-          message: "File found in directories. Check results folder.",
-        });
+      // If a file exists in the root directory, store in the base key of results.
+      if (fs.lstatSync(dirPath).isFile()) {
+        const data = require(dirPath);
+        result["base"][dir] = data;
+        continue;
       }
 
+      // If directory, then store files into that directory key.
       const files = fs.readdirSync(dirPath);
       result[dir] = {};
 
