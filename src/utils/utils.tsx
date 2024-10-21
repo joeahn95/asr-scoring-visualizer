@@ -107,7 +107,7 @@ export const readFiles = async (dir: string) => {
 };
 
 export const convertToMp4 = async (
-  webmFile: File,
+  blob: Blob,
   message: HTMLParagraphElement
 ) => {
   const ffmpeg = new FFmpeg();
@@ -124,19 +124,29 @@ export const convertToMp4 = async (
 
   await ffmpeg.writeFile(
     "recorded.webm",
-    await fetchFile(URL.createObjectURL(webmFile))
+    await fetchFile(URL.createObjectURL(blob))
   );
 
-  // Run FFmpeg command to convert WebM to MP4
+  // Run FFmpeg command to convert WebM to MP4.
   await ffmpeg.exec(["-i", "recorded.webm", "-r", "30", "output.mp4"]);
-  console.log("reading file");
 
-  // Read the result
+  // Read the result.
   const fileData = await ffmpeg.readFile("output.mp4");
   const data = new Uint8Array(fileData as ArrayBuffer);
 
-  console.log("creating blob");
-  // Convert to Blob for saving
+  // Convert to Blob for saving.
   const mp4Blob = new Blob([data.buffer], { type: "video/mp4" });
   return mp4Blob;
+};
+
+export const formatTime = (ms: number) => {
+  const totalSeconds = Math.floor(ms / 1000); // Convert milliseconds to seconds
+  const minutes = Math.floor(totalSeconds / 60); // Calculate minutes
+  const seconds = Math.floor(totalSeconds % 60); // Calculate remaining seconds
+
+  // Pad the minutes and seconds with leading zeroes if necessary
+  const formattedMinutes = String(minutes).padStart(2, "0");
+  const formattedSeconds = String(seconds).padStart(2, "0");
+
+  return `${formattedMinutes}:${formattedSeconds}`;
 };
