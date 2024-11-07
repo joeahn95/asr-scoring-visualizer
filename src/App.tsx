@@ -93,11 +93,11 @@ function App() {
           pointpos: -1.8,
           type: "box",
           marker: { color: COLORS[idx % COLORS.length] },
-          name: key.slice(0, key.length - 10),
+          name: key,
         });
 
         colorArr.push(COLORS[idx % COLORS.length]);
-        nameArr.push(key.slice(0, key.length - 10));
+        nameArr.push(key);
 
         idx++;
       }
@@ -135,7 +135,7 @@ function App() {
           pointpos: -1.8,
           type: "box",
           marker: { color: COLORS[idx % COLORS.length] },
-          name: key.slice(0, key.length - 12),
+          name: key,
         });
         idx++;
       }
@@ -163,7 +163,7 @@ function App() {
           pointpos: -1.8,
           type: "box",
           marker: { color: COLORS[idx % COLORS.length] },
-          name: key.slice(0, key.length - 16),
+          name: key,
         });
         idx++;
       }
@@ -172,12 +172,11 @@ function App() {
     }
 
     // SAVE JSON FILES FOR COMPARISON
-    let files = {};
+    let files: ResultObjOptions | null = {};
     for (let key in data) {
-      files = {
-        ...files,
-        ...data[key],
-      };
+      for (let fileKey in data[key]) {
+        files[fileKey + "_" + key] = data[key][fileKey];
+      }
     }
     console.log(files);
 

@@ -77,6 +77,7 @@ const EmulatorPage = () => {
   ) => {
     if (!event.target.files) return;
     const file = event.target.files[0]; // Get the selected file.
+    console.log(event.target.files);
     const data = await readFiles(file.name);
     if (data) {
       setTranscriptSrc(data); // Set complete transcript to transcriptSrc.

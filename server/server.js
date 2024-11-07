@@ -53,15 +53,22 @@ app.get("/inputs/:directory", function (req, res, next) {
         const filePath = path.join(dirPath, file);
         const data = require(filePath);
 
-        result[dir][file] = data;
+        if (!data["job"]) {
+          throw new Error(`No job property in file ${file}`);
+        }
+
+        const job = data["job"];
+
+        result[dir][job] = data;
       });
     }
 
     res.send(result);
   } catch (error) {
+    console.error(error); // Log error for debugging
     res.status(500).json({
-      error: "No such file or directory in public/inputs.",
-      message: "No such file or directory in public/inputs.",
+      error: error.message,
+      message: "An error occurred while processing the directory or files.",
     });
   }
 });
